@@ -2,8 +2,8 @@
 
 * Arduino Uno v3
 * Ethernet Shield
+* TM1637 4bit 7 segments module
 * Reads from a DS18S20 temperature sensor
-* Reads Unixtime from NTP Server
 * Reads Solar value
 * Writes data to MySQL database
 * Data is then used from a website.
