@@ -3,33 +3,35 @@
 #include <MySQL_Connection.h>
 #include <MySQL_Cursor.h>
 #include <Timer.h>
-#include <TM1637Display.h>
+#include <SevenSegmentTM1637.h>
 // ---------------------------------------------------------------------
+//
+// Sketch may not exceed lower then 825 bytes for local variables, else Arduino uno v3 resets in error
+//
+
+// Define space for dec2strf function
+char str[16] = "...";
 
 // Display section
-TM1637Display display(2, 3); // 4bit 7 segment module
-const uint8_t SEG_DONE[] = {
-  SEG_B | SEG_C | SEG_D | SEG_E | SEG_G,
-  SEG_A | SEG_B | SEG_C | SEG_D | SEG_E | SEG_F,
-  SEG_C | SEG_E | SEG_G,
-  SEG_A | SEG_D | SEG_E | SEG_F | SEG_G
-};                                                        // d 0 n E
-const uint8_t SEG_READY[] = {SEG_D, SEG_D, SEG_D, SEG_D}; // _ _ _ _
+SevenSegmentTM1637 display(2, 3); // 4bit 7 segment module
 
+// Timer
 Timer t;        // timers
+
+// Sensor
 OneWire ds(8);  // temp sensor on pin 8
 
 // Ethernet section
-byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+const byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
 IPAddress ip(192, 168, 0, 84);
 IPAddress myDns(192, 168, 0, 91);
 IPAddress gateway(192, 168, 0, 1);
 IPAddress subnet(255, 255, 255, 0);
 
 // MySQL Section
-IPAddress server_addr(192, 168, 0, 91); // IP of the MySQL *server* here
-char user[] = "temperature";            // mysql user
-char password[] = "justafakepassword";           // mysql password
+IPAddress server_addr(192, 168, 0, 91);       // IP of the MySQL *server* here
+const char user[] = "temperature";            // mysql user
+const char password[] = "fakepassword";       // mysql password
 EthernetClient client;
 MySQL_Connection conn((Client *)&client);
 
@@ -40,13 +42,13 @@ const unsigned long PERIOD1 = 500;  // half second blink for heartbeat led
 const unsigned int solarPin = A0;   // solar at analog pin A0
 
 String celsius;                     // variable for temperature as string
-int disptemp;                       // variable for temperature as integer for display
+String disptemp;                    // variable for temperature as integer for display
 int solarValue;                     // variable for reading A0
-int disptemp;                       // variable for temperature as integer
 String solarLevel;                  // variable for solar in procent
 int num_fails;                      // variable for number of failure attempts
 #define MAX_FAILED_CONNECTS 5       // maximum number of failed connects to MySQL
 int wissel = true;                  // change display check
+
 
 // ----------------------------------------------------------------------
 
@@ -55,6 +57,11 @@ void setup() {
   Serial.println("");
   Serial.println(F("#### START ####"));
 
+  display.begin();            // initializes the display
+  display.setBacklight(100);  // set the brightness to 100 %
+  display.clear();
+  display.print("INIT");      // display INIT on the display
+ 
   pinMode(ROOD, OUTPUT);
   pinMode(GEEL, OUTPUT);
   pinMode(GROEN, OUTPUT);
@@ -67,32 +74,32 @@ void setup() {
   digitalWrite(GROEN, LOW);
   digitalWrite(ROOD, HIGH);
 
-  display.setBrightness(2);
-
   Serial.print(F("Init IP: "));
 
   Ethernet.begin(mac, ip, myDns, gateway, subnet);
-
+  
   teller();
 
   Serial.println(Ethernet.localIP());
 
   // heartbeat
-  t.oscillate(GROEN, PERIOD1, HIGH);
+  t.oscillate(GROEN, PERIOD1, HIGH); // blinking green led
 
   // timers (max = 6)
-  int updateEthernetEvent = t.every(30000, updateEthernet, (void*)2);
-  int writeMySQLEvent = t.every(10000, writeMySQL, (void*)2);
-  int readSensorEvent = t.every(2500, readSensor, (void*)2);
-  int solarEvent = t.every(2500, readSolar, (void*)2);
-  int writesolarEvent = t.every(60000, writeSolar, (void*)2);
-  int writeDispEvent = t.every(5000, writeDisp, (void*)2);
+  int updateEthernetEvent = t.every(30000, updateEthernet, (void*)2); // update ethernet stuff
+  int writeMySQLEvent = t.every(10000, writeMySQL, (void*)2);         // write data to mysql
+  int readSensorEvent = t.every(2500, readSensor, (void*)2);          // read temperature
+  int solarEvent = t.every(2500, readSolar, (void*)2);                // read solar
+  int writeDispEvent = t.every(5000, writeDisp, (void*)2);            // write temperature and solar to TM1637 display
 
   digitalWrite(ROOD, LOW);
 
-  display.setSegments(SEG_DONE);
-  Serial.println(F("Ready"));
+  display.print("DONE");
+  display.blink();
+  display.setBacklight(25);
+  display.clear();
 
+  Serial.println(F("Ready"));
 }
 
 void loop() {
@@ -156,38 +163,101 @@ void readSensor(void* context)
     }
   }
   celsius = (float)raw / 16.0;
-  disptemp = (float)raw / 16.0;
+  disptemp = dec2strf((float)raw / 16.0,1);
+  disptemp.replace(".", "");    
 
+}
+
+char* dec2strf(float floatNumber, uint8_t dp)
+{
+  uint8_t ptr = 0;            // Initialise pointer for array
+  uint8_t  digits = 1;         // Count the digits to avoid array overflow
+  float rounding = 0.5;       // Round up down delta
+
+  if (dp > 7) dp = 7; // Limit the size of decimal portion
+
+  // Adjust the rounding value
+  for (uint8_t i = 0; i < dp; ++i) rounding /= 10.0;
+
+  if (floatNumber < -rounding)    // add sign, avoid adding - sign to 0.0!
+  {
+    str[ptr++] = '-'; // Negative number
+    str[ptr] = 0; // Put a null in the array as a precaution
+    digits = 0;   // Set digits to 0 to compensate so pointer value can be used later
+    floatNumber = -floatNumber; // Make positive
+  }
+
+  floatNumber += rounding; // Round up or down
+
+  // For overflow put ... in string and return (Nb. all TFT_ILI9341 library fonts contain . character)
+  if (floatNumber >= 2147483647) {
+    //str[ptr++] = '.'; str[ptr++] = '.'; str[ptr++] = '.'; str[ptr] = 0; // 
+    strcpy(str, "...");
+    return str;
+  }
+  // No chance of number overflow from here on
+
+  // Get integer part
+  unsigned long temp = (unsigned long)floatNumber;
+
+  // Put integer part into array
+  ltoa(temp, str + ptr, 10);
+
+  // Find out where the null is to get the digit count loaded
+  while ((uint8_t)str[ptr] != 0) ptr++; // Move the pointer along
+  digits += ptr;                        // Count the digits
+
+  str[ptr++] = '.';   // Add decimal point and increment pointer
+  str[ptr] = '0';   // Add a dummy zero
+  str[ptr + 1] = 0; // Add a null but don't increment pointer so it can be overwritten
+
+  // Get the decimal portion
+  floatNumber = floatNumber - temp;
+
+  // Get decimal digits one by one and put in array
+  // Limit digit count so we don't get a false sense of resolution
+  uint8_t i = 0;
+  while ((i < dp) && (digits < 9)) // while (i < dp) for no limit but array size must be increased
+  {
+    i++;
+    floatNumber *= 10;       // for the next decimal
+    temp = floatNumber;      // get the decimal
+    ltoa(temp, str + ptr, 10);
+    ptr++; digits++;         // Increment pointer and digits count
+    floatNumber -= temp;     // Remove that digit
+  }
+  
+  // Finally we can return a pointer to the string
+  return str;
 }
 
 void writeDisp(void* context)
 {
-  int8_t datadisplay[] = {0x0, 0x0, 0x0, 0x0};
+
+display.clear();
+display.setColonOn(0);
 
   if (wissel) {
 
     Serial.println(F("INFO: Update display C"));
-    int digitoneT = disptemp / 10;
-    int digittwoT = disptemp % 10;
-
-    datadisplay[0] = display.encodeDigit(digitoneT);
-    datadisplay[1] = display.encodeDigit(digittwoT);
-    datadisplay[3] = display.encodeDigit(12); // C
-
-    display.setSegments(datadisplay);
+    display.setColonOn(1);
+    byte rawData;
+    rawData = B01100011;
+    display.print(disptemp);    
+    display.printRaw(rawData,3);
     wissel = false;
 
   } else {
 
-    Serial.println(F("INFO: Update display A"));
+    Serial.println(F("INFO: Update display P"));
     int digitoneS = map(solarValue, 0, 587, 0, 100) / 10;
     int digittwoS = map(solarValue, 0, 587, 0, 100) % 10;
+    int8_t datadisplay[] = {0x0, 0x0, 0x0, 0x0};
+    datadisplay[0] = display.encode(digitoneS);
+    datadisplay[1] = display.encode(digittwoS);
+    datadisplay[3] = display.encode('P'); // P
 
-    datadisplay[0] = display.encodeDigit(digitoneS);
-    datadisplay[1] = display.encodeDigit(digittwoS);
-    datadisplay[3] = display.encodeDigit(10); // A
-
-    display.setSegments(datadisplay);
+    display.printRaw(datadisplay);
     wissel = true;
 
   }
@@ -201,60 +271,35 @@ void writeMySQL(void* context)
 
   Serial.print(F(" Temp: "));
   Serial.println(celsius);
+  Serial.print(F(" Solar: "));
+  Serial.print(solarValue);
+  Serial.print(F(" Opbrengst: "));
+  Serial.println(solarLevel);
 
+  String SQL;
+  int tmp_str_len;
   if (conn.connected()) {
     t.oscillate(GEEL, 75, LOW, 3);
 
     MySQL_Cursor *cur_mem = new MySQL_Cursor(&conn);
-    String SQL = "UPDATE temperatuur.current SET value='" +  celsius + "', logtime=UNIX_TIMESTAMP(now()) WHERE log_id='3'";
-    int str_len = SQL.length() + 1;
-    char query[str_len];
-    SQL.toCharArray(query, str_len);
-    cur_mem->execute(query);
+    SQL = "UPDATE temperatuur.current SET value='" +  celsius + "', logtime=UNIX_TIMESTAMP(now()) WHERE log_id='3'";
+  
+    tmp_str_len = SQL.length() + 1;
+    char mquery[tmp_str_len];
+    SQL.toCharArray(mquery, tmp_str_len);
+    cur_mem->execute(mquery);
+
+    SQL = "INSERT INTO temperatuur.solar (value, date) VALUES('" +  solarLevel + "', UNIX_TIMESTAMP(now())) ";
+    tmp_str_len = SQL.length() + 1;
+    char mmquery[tmp_str_len];
+    SQL.toCharArray(mmquery, tmp_str_len);
+    cur_mem->execute(mmquery);
+
     delete cur_mem;
 
     num_fails = 0;                 // reset failures
   } else {
     t.oscillate(ROOD, 250, LOW, 50); // error
-    if (conn.connect(server_addr, 3306, user, password)) {
-      delay(500);
-    } else {
-      t.oscillate(ROOD, 250, LOW, 50); // error
-      num_fails++;
-      if (num_fails == MAX_FAILED_CONNECTS) {
-        Serial.println(F("ERROR: MySQL Failed!"));
-        teller();
-        soft_reset();
-      }
-    }
-  } //
-  t.oscillate(ROOD, 75, LOW, 3);
-}
-
-
-void writeSolar(void* context)
-{
-
-  Serial.println(F("INFO:: Write Solar to MySQL"));
-
-
-  Serial.print(" Solar: ");
-  Serial.print(solarValue);
-  Serial.print(" Opbrengst: ");
-  Serial.println(solarLevel);
-
-  if (conn.connected()) {
-    t.oscillate(GEEL, 75, LOW, 3);
-    MySQL_Cursor *cur_mem2 = new MySQL_Cursor(&conn);
-    String SQL2 = "INSERT INTO temperatuur.solar (value, date) VALUES('" +  solarLevel + "', UNIX_TIMESTAMP(now())) ";
-    int str_len2 = SQL2.length() + 1;
-    char char_array2[str_len2];
-    SQL2.toCharArray(char_array2, str_len2);
-    cur_mem2->execute(char_array2);
-    delete cur_mem2;
-    num_fails = 0;                 // reset failures
-  } else {
-    t.oscillate(ROOD, 250, LOW, 50); //error
     if (conn.connect(server_addr, 3306, user, password)) {
       delay(500);
     } else {
@@ -280,15 +325,16 @@ void readSolar(void* context)
 void soft_reset() {
   Serial.println("");
   Serial.println(F("INFO: RESET!"));
+  display.print("BOOT");
   teller();
   asm volatile("jmp 0");
 }
 
 void teller() {
-  for ( int i = 5; i >= 0; i--) {
-    display.showNumberDec(i, false, 4, 4);
+ display.clear();
+ for ( int c = 20; c >= 0; c--) {
+    display.print(c);
     delay(1000);
+    display.clear();
   }
-  display.setSegments(SEG_READY);
-  delay(500);
 }
