@@ -19,50 +19,69 @@ extern unsigned long timer0_overflow_count; // ignore overflow errors from milli
 #include <OneWire.h>  // I2C Bus wire lib
 #include <DallasTemperature.h> // Temperature sensor lib
 
-// TempSensor input pin
+// ############################################################################
+// # Temperature Sensor DS18B20
 #define DATA_PIN 2
 // How many bits to use for temperature values: 9, 10, 11 or 12
 #define SENSOR_RESOLUTION 12
 // Index of sensors connected to data pin, default: 0
 #define SENSOR_INDEX 0
-
 OneWire oneWire(DATA_PIN);
 DallasTemperature sensors(&oneWire);
 DeviceAddress sensorDeviceAddress;
+int tempMin = 22; // The temperature to start the fan
+int tempMax = 30; // The temperature when it needs at full speed
 
-// RGB
+// ############################################################################
+// # RGB LED strip (5050)
 #define RED_PIN 3
 #define GREEN_PIN 5
 #define BLUE_PIN 6
-//   # of milliseconds to pause between each pass of the loop
-#define LOOP_DELAY 5
+int lr;
+int lg;
+int lb;
+unsigned int rgbColour[3];
 
-#define OFFLED 4    // pin
-#define RLA 8      // pin Relay #1
+// ############################################################################
+// # 4 Relay Module
+#define RLA 8       // pin Relay #1
 #define RLB 10      // pin Relay #2
 #define RLC 11      // pin Relay #3
 #define RLD 19      // pin Relay #4 on A5 as digitalpin
-const unsigned int buttonPin  = 7;  // pin
-const unsigned int ledPin     = 13; // pin
-const unsigned int solarPin   = A0; // pin
-const unsigned int MotorPin  = 9;  // pin
 
-int buttonState       = LOW;
-int lastButtonState   = LOW;
-int lampState         = LOW;
-long previousTime     = LOW;
+// ############################################################################
+// # Status leds
+const unsigned int ledPin     = 13; // pin - Green led
+#define OFFLED 4                    // pin - Red led
+
+// ############################################################################
+// # Solar (Small solar panel, about 1.5 volt orso)
+const unsigned int solarPin   = A0; // pin
 int solarValue        = LOW;
 int solarState        = LOW;
 String solarLevel     = "";
+const unsigned int solarHigh  = 120;  // Higher is lamp stays off
+const unsigned int solarLow   = 85;   // Below is lamp on + timer start
+
+// ############################################################################
+// # Button (momentary)
+const unsigned int buttonPin  = 7;  // pin
+int buttonState       = LOW;
+int lastButtonState   = LOW;
 int buttonOff         = LOW;
 
-const unsigned int solarHigh  = 120;  // higher is lamp stays off -- 100
-const unsigned int solarLow   = 85;   // below is lamp on + timer start -- 50
-unsigned long currentTime;
-long interval = (60000 * 60) * 4;     // Turn off after 4 hours
-unsigned int rgbColour[3];
+// ############################################################################
+// # Main state of lamp trigger
+int lampState         = LOW;
 
-//test
+// ############################################################################
+// # Timer
+long previousTime     = LOW;
+unsigned long currentTime;
+long interval = (60000 * 60) * 4;     // Turn off lamp/rgb after 4 hours
+
+// ############################################################################
+// # test time code
 unsigned long c_mil;
 long p_mil;
 long m;
@@ -70,16 +89,21 @@ int seconds;
 int minutes;
 int hours;
 
-int lr;
-int lg;
-int lb;
+// ############################################################################
+// # FAN ( Speed is controlled by temperature ) 
+const unsigned int fanPin  = 9;   // pin
+int fanSpeed = 0;
+int lastfanSpeed = 0;
 
-// Init timer library
+// ############################################################################
+// # Init timer library
 Timer t;
 
 void setup() {
-
-
+  // Start Serial
+  Serial.begin(9600);
+  
+  // Play startup tones
   tone(12, NOTE_C6, 150);
   delay(200);
   tone(12, NOTE_D6, 150);
@@ -87,8 +111,6 @@ void setup() {
   tone(12, NOTE_C7, 150);
   delay(200);
   noTone(12);
-
-  Serial.begin(9600);
 
   // Set pin mode
   pinMode(OFFLED, OUTPUT);
@@ -100,20 +122,20 @@ void setup() {
   pinMode(RLB, OUTPUT);
   pinMode(RLC, OUTPUT);
   pinMode(RLD, OUTPUT);
-  pinMode(MotorPin, OUTPUT);
+  pinMode(fanPin, OUTPUT);
   pinMode(buttonPin, INPUT);
 
   // Set pin defaults
-  digitalWrite(ledPin, LOW);
-  digitalWrite(OFFLED, HIGH);
-  digitalWrite(RLA, HIGH);
-  digitalWrite(RLB, HIGH);
-  digitalWrite(RLC, HIGH);
-  digitalWrite(RLD, HIGH);
-  analogWrite(MotorPin, 0);
+  digitalWrite(ledPin, LOW);  // Green OFF
+  digitalWrite(OFFLED, HIGH); // Red ON
+  digitalWrite(RLA, HIGH);    // Relay off
+  digitalWrite(RLB, HIGH);    // Relay off
+  digitalWrite(RLC, HIGH);    // Relay off
+  digitalWrite(RLD, HIGH);    // Relay off
+  analogWrite(fanPin, 0);   // FAN off
+  setColourRgb(0, 0, 0);      // Turn off RGB
 
-  setColourRgb(0, 0, 0);
-
+  // Temperature Sensor
   sensors.begin();
   sensors.getAddress(sensorDeviceAddress, 0);
   sensors.setResolution(sensorDeviceAddress, SENSOR_RESOLUTION);
@@ -129,24 +151,25 @@ void setup() {
   randomSeed(analogRead(4)); // A4
 
   // Remove FAN noise by using lower PWM frequency
-  setPwmFrequency(MotorPin, 1024); // 31 Hz
+  setPwmFrequency(fanPin, 1024); // 31 Hz
 }
 
 void loop() {
-  // update values
+  // Update values
   solarValue = analogRead(solarPin);
   solarLevel = map(solarValue, 0, 1023, 0, 100);
   currentTime = millis();
   buttonState = digitalRead(buttonPin);
 
+  // Randomize RGB colors
   lr = random(0, 255);
   lg = random(0, 255);
   lb = random(0, 255);
 
-  // update timers
+  // Update timers
   t.update();
 
-  // test code
+  // test time code - test time code - test time code
   c_mil = millis();
   m += c_mil - p_mil;
   // should work even when millis rolls over
@@ -157,13 +180,14 @@ void loop() {
   hours += minutes / 60;
   minutes = minutes % 60;
   p_mil = c_mil;
+  // test time code - test time code - test time code
 }
 
 void checkLamp(void* context)
 {
   // Turn Lamp on or off depending on lampState value
   digitalWrite(ledPin, lampState);
-  digitalWrite(RLA, !lampState); //use negative hope it works
+  digitalWrite(RLA, !lampState); // Note the ! to invert it.
 }
 
 void checkRGB(void* context)
@@ -223,12 +247,23 @@ void checkSolar(void* context)
 
 void checkTimer(void* context)
 {
-
-  Serial.print(F(" | Device is running "));
+  if (hours < 10) {
+    Serial.print(F(" | Device Uptime: 0")); 
+  } else {
+    Serial.print(F(" | Device Uptime: ")); 
+  }
   Serial.print(hours);
-  Serial.print(F(":"));
+  if (minutes < 10) {  
+    Serial.print(F(":0"));
+  } else {
+    Serial.print(F(":"));
+  }
   Serial.print(minutes);
-  Serial.print(F(":"));
+  if (seconds < 10) {  
+    Serial.print(F(":0"));
+  } else {
+    Serial.print(F(":"));
+  }
   Serial.println(seconds);
 
   Serial.print(F(" | Timer: Milis: "));
@@ -241,8 +276,6 @@ void checkTimer(void* context)
   Serial.println(interval);
 
   sensors.requestTemperatures();
-  // Measurement may take up to 750ms
-
   float temperatureInCelsius = sensors.getTempCByIndex(SENSOR_INDEX);
   float temperatureInFahrenheit = sensors.getTempFByIndex(SENSOR_INDEX);
 
@@ -250,22 +283,27 @@ void checkTimer(void* context)
   Serial.print(temperatureInCelsius, 4);
   Serial.println(" Celsius");
 
-  int tempMin = 23; // the temperature to start the fan
-  int tempMax = 30;
-  int fanSpeed = 0;
-  if ((temperatureInCelsius >= tempMin) && (temperatureInCelsius <= tempMax)) //if temperature is higher than the minimum range
-  {
+if (temperatureInCelsius <= -127) {
+  // This sensor sometimes, not often, shows -127.0000, so skip the rest of the code till
+  // next cycle.
+  return;
+  }
 
-    digitalWrite(RLD, LOW);
-    fanSpeed = map(temperatureInCelsius, tempMin, tempMax, 90, 255); // the actual speed of fan
-
-    analogWrite(MotorPin, fanSpeed); // spin the fan at the fanSpeed speed
+  if ((temperatureInCelsius >= tempMin) && (temperatureInCelsius <= tempMax)) {
+    digitalWrite(RLD, LOW); // Power the FAN by setting Relay D
+    fanSpeed = map(temperatureInCelsius, tempMin, tempMax, 67, 255); // Calculate FAN Speed
+    analogWrite(fanPin, fanSpeed); // Set FAN Speed
     Serial.print(F(" | FAN: Speed: "));
     Serial.println(fanSpeed);
+    if (lastfanSpeed != fanSpeed) {
+      // play note when FAN speed changes.
+      tone(12, NOTE_A7, 150);
+    }
+    lastfanSpeed = fanSpeed;
   }
 
   if (temperatureInCelsius < tempMin) {
-    analogWrite(MotorPin, 0);
+    analogWrite(fanPin, 0);
     digitalWrite(RLD, HIGH);
   }
 
@@ -284,7 +322,6 @@ void checkTimer(void* context)
     }
     previousTime = currentTime;
   }
-
 }
 
 void checkButton(void* context)
