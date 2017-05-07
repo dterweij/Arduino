@@ -13,7 +13,7 @@ extern unsigned long timer0_overflow_count; // ignore overflow errors from milli
 // ToDo: buy RTC clock module.
 //
 // Play: Playing with a airfan that switches on/off by temperature.
-// 
+//
 #include "Timer.h"    // timer library
 #include "pitches.h"  // speaker sound notes. speaker on pin 12
 #include <OneWire.h>  // I2C Bus wire lib
@@ -56,8 +56,8 @@ int solarState        = LOW;
 String solarLevel     = "";
 int buttonOff         = LOW;
 
-const unsigned int solarHigh  = 100;  // higher is lamp stays off -- 100
-const unsigned int solarLow   = 60;   // below is lamp on + timer start -- 50
+const unsigned int solarHigh  = 120;  // higher is lamp stays off -- 100
+const unsigned int solarLow   = 85;   // below is lamp on + timer start -- 50
 unsigned long currentTime;
 long interval = (60000 * 60) * 4;     // Turn off after 4 hours
 unsigned int rgbColour[3];
@@ -70,11 +70,16 @@ int seconds;
 int minutes;
 int hours;
 
+int lr;
+int lg;
+int lb;
 
 // Init timer library
 Timer t;
 
 void setup() {
+
+
   tone(12, NOTE_C6, 150);
   delay(200);
   tone(12, NOTE_D6, 150);
@@ -96,7 +101,6 @@ void setup() {
   pinMode(RLC, OUTPUT);
   pinMode(RLD, OUTPUT);
   pinMode(MotorPin, OUTPUT);
-  analogWrite(MotorPin, 55);
   pinMode(buttonPin, INPUT);
 
   // Set pin defaults
@@ -106,6 +110,7 @@ void setup() {
   digitalWrite(RLB, HIGH);
   digitalWrite(RLC, HIGH);
   digitalWrite(RLD, HIGH);
+  analogWrite(MotorPin, 0);
 
   setColourRgb(0, 0, 0);
 
@@ -117,8 +122,14 @@ void setup() {
   int buttonEvent = t.every(10, checkButton, (void*)2);
   int timerEvent  = t.every(2000, checkTimer, (void*)2);
   int solarEvent  = t.every(20000, checkSolar, (void*)2);
-  int rgbEvent    = t.every(1800, checkRGB, (void*)2);
+  int rgbEvent    = t.every(10000, checkRGB, (void*)2);
   int lampEvent   = t.every(10, checkLamp, (void*)2);
+
+  // Random seeder on empty not used pin
+  randomSeed(analogRead(4)); // A4
+
+  // Remove FAN noise by using lower PWM frequency
+  setPwmFrequency(MotorPin, 1024); // 31 Hz
 }
 
 void loop() {
@@ -128,11 +139,14 @@ void loop() {
   currentTime = millis();
   buttonState = digitalRead(buttonPin);
 
+  lr = random(0, 255);
+  lg = random(0, 255);
+  lb = random(0, 255);
+
   // update timers
   t.update();
 
-  // test
-
+  // test code
   c_mil = millis();
   m += c_mil - p_mil;
   // should work even when millis rolls over
@@ -150,7 +164,6 @@ void checkLamp(void* context)
   // Turn Lamp on or off depending on lampState value
   digitalWrite(ledPin, lampState);
   digitalWrite(RLA, !lampState); //use negative hope it works
-
 }
 
 void checkRGB(void* context)
@@ -158,11 +171,7 @@ void checkRGB(void* context)
   if (lampState) {
     Serial.println(F(" | RGB ON "));
     digitalWrite(OFFLED, LOW);
-
-    analogWrite(RED_PIN, random(30));
-    analogWrite(GREEN_PIN, random(30));
-    analogWrite(BLUE_PIN, random(30));
-
+    setColourRgb(lr, lg, lb);
   } else {
     setColourRgb(0, 0, 0);
     digitalWrite(OFFLED, HIGH);
@@ -241,10 +250,22 @@ void checkTimer(void* context)
   Serial.print(temperatureInCelsius, 4);
   Serial.println(" Celsius");
 
-  if (temperatureInCelsius > 25) {
-    digitalWrite(RLD, LOW);
-  } else {
+  int tempMin = 23; // the temperature to start the fan
+  int tempMax = 30;
+  int fanSpeed = 0;
+  if ((temperatureInCelsius >= tempMin) && (temperatureInCelsius <= tempMax)) //if temperature is higher than the minimum range
+  {
 
+    digitalWrite(RLD, LOW);
+    fanSpeed = map(temperatureInCelsius, tempMin, tempMax, 90, 255); // the actual speed of fan
+
+    analogWrite(MotorPin, fanSpeed); // spin the fan at the fanSpeed speed
+    Serial.print(F(" | FAN: Speed: "));
+    Serial.println(fanSpeed);
+  }
+
+  if (temperatureInCelsius < tempMin) {
+    analogWrite(MotorPin, 0);
     digitalWrite(RLD, HIGH);
   }
 
@@ -309,4 +330,36 @@ void setColourRgb(unsigned int red, unsigned int green, unsigned int blue) {
   analogWrite(RED_PIN, red);
   analogWrite(GREEN_PIN, green);
   analogWrite(BLUE_PIN, blue);
+}
+
+// PWM Frequency changer
+void setPwmFrequency(int pin, int divisor) {
+  byte mode;
+  if(pin == 5 || pin == 6 || pin == 9 || pin == 10) {
+    switch(divisor) {
+      case 1: mode = 0x01; break;
+      case 8: mode = 0x02; break;
+      case 64: mode = 0x03; break;
+      case 256: mode = 0x04; break;
+      case 1024: mode = 0x05; break;
+      default: return;
+    }
+    if(pin == 5 || pin == 6) {
+      TCCR0B = TCCR0B & 0b11111000 | mode;
+    } else {
+      TCCR1B = TCCR1B & 0b11111000 | mode;
+    }
+  } else if(pin == 3 || pin == 11) {
+    switch(divisor) {
+      case 1: mode = 0x01; break;
+      case 8: mode = 0x02; break;
+      case 32: mode = 0x03; break;
+      case 64: mode = 0x04; break;
+      case 128: mode = 0x05; break;
+      case 256: mode = 0x06; break;
+      case 1024: mode = 0x07; break;
+      default: return;
+    }
+    TCCR2B = TCCR2B & 0b11111000 | mode;
+  }
 }
