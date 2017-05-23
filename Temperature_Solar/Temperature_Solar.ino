@@ -163,10 +163,13 @@ void readSensor(void* context)
     default:
       digitalWrite(GEEL, HIGH);
       digitalWrite(ROOD, HIGH);
-      Serial.println(F(" NO SENSOR"));
+      Serial.println(F("NO SENSOR"));
       return;
   }
 
+  ds.reset();
+  ds.select(addr);
+  ds.write(0x44, 1); // reset chip
 
   present = ds.reset();
   ds.select(addr);
