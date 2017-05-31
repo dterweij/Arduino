@@ -7,9 +7,9 @@
 // ---------------------------------------------------------------------
 //
 // Sketch may not exceed lower then 825 bytes for local variables, else Arduino uno v3 resets in error
-// Current: Sketch - 28254 bytes used
-// Global variables - 1213 bytes used
-// Local variables - 835 bytes free (10 bytes remaining before it crashes!)
+// Current: Sketch - 28590 bytes used
+// Global variables - 1217 bytes used
+// Local variables - 831 bytes free (6 bytes remaining before it crashes!)
 //
 // Ethernet shield
 //
@@ -57,7 +57,8 @@ String solarLevel;                  // variable for solar in procent
 int num_fails;                      // variable for number of failure attempts
 #define MAX_FAILED_CONNECTS 5       // maximum number of failed connects to MySQL
 int wissel = true;                  // change display check
-
+int solarCnt          = 1;          // for a stable solar reading
+int solarTmp          = 0;          // for a stable solar reading
 
 // ----------------------------------------------------------------------
 
@@ -122,6 +123,17 @@ void setup() {
 
 void loop() {
   t.update();
+  int solar = analogRead(solarPin);
+ // Make solar value more stable
+ // Makes also a better graphics picture smoother
+  if (solarCnt == 30) {
+    solarValue = solarTmp / 30;
+    solarTmp = 0;
+    solarCnt = 1;
+  } else {
+    solarTmp = solarTmp + solar;
+    solarCnt++;
+  }
 }
 
 void updateEthernet(void* context)
@@ -268,8 +280,8 @@ void writeDisp(void* context)
   } else {
 
     Serial.println(F("INFO: Update display P"));
-    int digitoneS = map(solarValue, 0, 587, 0, 100) / 10;
-    int digittwoS = map(solarValue, 0, 587, 0, 100) % 10;
+    int digitoneS = map(solarValue, 0, 672, 0, 100) / 10;
+    int digittwoS = map(solarValue, 0, 672, 0, 100) % 10;
     int8_t datadisplay[] = {0x0, 0x0, 0x0, 0x0};
     datadisplay[0] = display.encode(digitoneS);
     datadisplay[1] = display.encode(digittwoS);
@@ -337,9 +349,12 @@ void readSolar(void* context)
 {
   t.oscillate(ld1, 50, LOW, 1);
   Serial.print(F("INFO: Read Solar - "));
-  solarValue = analogRead(solarPin);
-  solarLevel = map(solarValue, 0, 587, 0, 100);
-  Serial.println(solarLevel);
+
+  solarLevel = map(solarValue, 0, 672, 0, 100);
+  
+  Serial.print(solarLevel);
+  Serial.print(F(" P - "));
+  Serial.println(solarValue);
 }
 
 void soft_reset() {
