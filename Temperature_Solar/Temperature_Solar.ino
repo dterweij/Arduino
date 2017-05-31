@@ -34,8 +34,8 @@ IPAddress subnet(255, 255, 255, 0);
 
 // MySQL Section
 IPAddress server_addr(192, 168, 0, 91); // IP of the MySQL *server* here
-const char user[] = "temperatuur";            // mysql user
-const char password[] = "Poema001";           // mysql password
+const char user[] = "user";            // mysql user
+const char password[] = "pass";           // mysql password
 EthernetClient client;
 MySQL_Connection conn((Client *)&client);
 
