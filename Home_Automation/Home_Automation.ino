@@ -8,6 +8,7 @@ extern unsigned long timer0_overflow_count; // ignore overflow errors from milli
 // Used: A few resistors, capacitors
 // Used: A fan
 // Used: A 8 Ohm small speaker
+// Used: OP400 OPAMP chip (Though, I ordered a LM358, the OP400 is very old and is not working well)
 //
 // Lamp/RGB strip goes on when Solar is below value x, stays on for x hours.
 // Everything can be turned off manual by the pushbutton.
@@ -44,7 +45,7 @@ OneWire oneWire(DATA_PIN);
 DallasTemperature sensors(&oneWire);
 DeviceAddress sensorDeviceAddress;
 // FAN speed controlled between Min and Max, above max is full speed
-int tempMin = 23; // The temperature to start the fan
+int tempMin = 25; // The temperature to start the fan
 int tempMax = 30; // The temperature when it needs at full speed
 String myTemp;
 float temperatureInCelsius = 0;
@@ -75,7 +76,7 @@ const unsigned int solarPin   = A0; // Pin
 int solarValue        = 0;
 int solarState        = 0;
 String solarLevel     = "";
-const unsigned int solarHigh  = 100;  // Higher is lamp stays off
+const unsigned int solarHigh  = 150;  // Higher is lamp stays off (Also a buffer)
 const unsigned int solarLow   = 90;   // Below is lamp on + timer start
 int solarCnt          = 1;
 int solarTmp          = 0;
@@ -152,7 +153,39 @@ void setup() {
   digitalWrite(RLC, HIGH);    // Relay off
   digitalWrite(RLD, HIGH);    // Relay off
   analogWrite(fanPin, 0);     // FAN off
-  setColourRgb(0, 0, 0);      // Turn off RGB
+
+  digitalWrite(RLD, LOW); // Power the FAN by setting Relay D
+  Serial.println("Fan Test");
+
+  for ( int f = 100; f <= 255; f++) {
+    Serial.println(f);
+    analogWrite(fanPin, f);     // FAN test
+    delay(125);
+  }
+  delay(1500);
+  for ( int f = 255; f >= 100; f--) {
+    Serial.println(f);
+    analogWrite(fanPin, f);     // FAN test
+    delay(125);
+  }
+
+  delay(1500);
+  digitalWrite(RLD, HIGH); // Power the FAN by setting Relay D
+
+  analogWrite(fanPin, 0);     // FAN off
+
+  Serial.println("RGB Test");
+  setColourRgb(0, 0, 0);      // Turn off RGB OFF
+
+  // Test leds
+  setColourRgb(255, 0, 0);    // RGB Red
+  delay(1500);
+  setColourRgb(0, 255, 0);    // RGB Green
+  delay(1500);
+  setColourRgb(0, 0, 255);    // RGB Blue
+  delay(1500);
+
+  setColourRgb(0, 0, 0);      // Turn off RGB OFF
 
   // Temperature Sensor
   sensors.begin();
@@ -165,7 +198,7 @@ void setup() {
   int solarEvent  = t.every(3000, checkSolar, (void*)2);
   int rgbEvent    = t.every(50, checkRGB, (void*)2);
   int lampEvent   = t.every(2000, checkLamp, (void*)2);
-  int tempEvent   = t.every(750, checkTemp, (void*)2);
+  int tempEvent   = t.every(4750, checkTemp, (void*)2);
 
   // Remove flickering by using highest PWM frequency (PIN usage is important!)
   setPwmFrequency(RED_PIN, 1); // 31 KHz
@@ -173,7 +206,12 @@ void setup() {
   setPwmFrequency(BLUE_PIN, 1); // 31 KHz
 
   // Just set to default, if you change this then timers and milis() are messing up
-  // I used for now a capacitor to remove the pitched tone
+  // I am playing now with a OPAMP as a DAC to filter the high pitch noise
+  // Currently i using a OP400 chip and use 2 OPAMPS in serial with at the PWM output
+  // a lowpass filter.
+  // The 5 Volt PWM is amplified to about 8 volt and feed into the MOSFET Gate.
+  // Though it is stressing the MOSFET with high temperature.
+  // The FANS (8 pieces) current is about 0.9A at 255 PWM.
   setPwmFrequency(fanPin, 64); // 64 = default
 
   // Inter communication
@@ -182,6 +220,10 @@ void setup() {
   Wire.onRequest(sendData);
 
   Serial.println("################### Started ####################");
+
+  tone(SPEAKER, NOTE_A6, 50);
+  delay(55);
+  tone(SPEAKER, NOTE_A7, 50);
 }
 
 // ############################################################################
@@ -226,7 +268,7 @@ void checkTemp(void* context)
 
   myTemp = dec2strf((float)temperatureInCelsius, 1);
 
-  fanSpeed = map(temperatureInCelsius, tempMin, tempMax, 108, 255); // Calculate FAN Speed
+  fanSpeed = map(temperatureInCelsius, tempMin, tempMax, 130, 255); // Calculate FAN Speed
 
   if (fanSpeed > 255)
     fanSpeed = 255;
@@ -242,8 +284,8 @@ void checkTemp(void* context)
   }
 
   if ((temperatureInCelsius >= tempMin) && (temperatureInCelsius <= tempMax)) {
-    digitalWrite(RLD, LOW); // Power the FAN by setting Relay D
-    analogWrite(fanPin, fanSpeed); // Set FAN Speed
+    digitalWrite(RLD, LOW);         // Power the FAN by setting Relay D
+    analogWrite(fanPin, fanSpeed);  // Set FAN Speed
     Serial.print(F(" | FAN: Speed: "));
     Serial.println(fanSpeed);
     lastfanSpeed = fanSpeed;
@@ -287,16 +329,16 @@ void checkRGB(void* context)
     greenLevel = map(greenLevel, -1000, 1000, 0, 100);
     blueLevel = map(blueLevel, -1000, 1000, 0, 100);
     setColourRgb(redLevel, greenLevel, blueLevel);
-    
+
     Serial.print(F(" | RGB colors r,g,b: "));
     Serial.print(redLevel);
     Serial.print(F(","));
-    
+
     Serial.print(greenLevel);
     Serial.print(F(","));
 
     Serial.println(blueLevel);
-    
+
   } else {
     counter = 0;
     setColourRgb(0, 0, 0);
@@ -332,6 +374,11 @@ void checkSolar(void* context)
 
 void checkTimer(void* context)
 {
+
+  if (!lampState) {
+    // when off then no timer needed.
+    return;
+  }
 
   Serial.print(F(" | Timer: Milis: "));
   Serial.print(currentTime);
