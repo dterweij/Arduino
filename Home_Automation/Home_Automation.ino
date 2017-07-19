@@ -1,39 +1,48 @@
 //
 // Start of home automation system.
 //
-// Used: Small Solar panel, 4 relay module, RGB Strip, Dallas Temperature sensor
 // - Solar going to be replaced by a LDR to see if it is more stable.
+// - Temperature sensor going to be moved to another board and data is send via 433Mhz link
+// - LDR Setup is build and in testing on another breadboard (analog to digital converter)
+// \ LDR(GL5537),MOSFET(IRFZ44N),NAND IC(CD4093BE),Transistor(BC560C),3 resistors.
 //
+// Used: Small Solar panel, 4 relay module, RGB Strip, Dallas Temperature sensor
 // Used: 2 leds - red and green, pushbutton, 4x MOSFET N-Channel (IRFZ44N)
 // Used: A few resistors, capacitors
 // Used: A fan
 // Used: A 8 Ohm small speaker
 // Used: LM358 OPAMP + low pass filter,
 // - as driver to the MOSFET that controls FAN Speed to remove high pitch noise
+// Used: Tiny RTC DS1307 Clock module
+// Used: Using 433Mhz receiver (MX-RM-5V)
 //
 // Lamp/RGB strip goes on when Solar is below value x, stays on till x hour.
 // Everything can be turned off manual by the pushbutton.
 //
 // I2C communication from Raspbery PI B+ (Raspbian OS) to send commands (No ttl regulator (3.3v/5v) module used!)
 // Still as playground, it works well. Going to see if I can make a webpage for controlling.
-//
-// ToDo: buy RTC clock module ( RTC clock module on its way :-) ... from china so still on its way )
+// - I2C connection is broken. Because the TTL diffence, now that the RTC is in use.
 //
 // Play: Playing with a airfan that switches on/off by temperature.
 // - Works well. Might be permanent to cool the Arduino and MOSFETS when cased.
 //
-#include <Arduino.h>
 #include "Timer.h"              // Timer library - https://github.com/JChristensen/Timer
 #include "pitches.h"            // Speaker notes - https://www.arduino.cc/en/Tutorial/toneMelody
-#include <OneWire.h>            // I2C Bus wire (Standard lib)
+#include <OneWire.h>            // I2C Bus onewire (Standard lib)
 #include <DallasTemperature.h>  // Temperature sensor (Standard lib)
 #include <Wire.h>               // I2C Communication (Standard lib)
 #include "RTClib.h"             // The RTC Module (Standard lib)
+#include <RH_ASK.h>             // RF 433Mhz driver - http://www.airspayce.com/mikem/arduino/RadioHead/
+
+#define DEBUG 1 // Set debug mode (Serial Log: 1 = enabled / 2 = disabled)
+
+// ############################################################################
+// # RF 433Mhz driver (Speed,rx,tx,ptt)
+RH_ASK driver(1000, 9, A1, A2); // Speed 100, RX = pin 9. Using unused pins for the rest
 
 // ############################################################################
 // # RTC Clock Module
-//RTC_DS1307 rtc; // hardware RTC
-RTC_Millis rtc; // software RTC
+RTC_DS1307 rtc; // hardware RTC
 
 // ############################################################################
 // # Automatic process
@@ -84,17 +93,17 @@ float pi = 3.14159;
 #define RLA 8       // Pin Relay #1 -- FAN power on/off
 #define RLB 4       // Pin Relay #2 -- Power to on/off leds
 #define RLC 6       // Pin Relay #3 -- RGB power on/off
-#define RLD A1      // Pin Relay #4 -- To Lamp relay (240Volt) on A1 as digitalpin (To pin 13 in future?)
+#define RLD 13      // Pin Relay #4 -- To Lamp relay (240Volt)
 
 
 // ############################################################################
 // # Solar (Small solar panel, about 1.5 volt orso)
-const unsigned int solarPin   = A0; // Pin
+const unsigned int solarPin   = A0;   // Pin
 int solarValue        = 0;
-int solarState        = 0;
+int solarState        = 1;
 String solarLevel     = "";
-const unsigned int solarHigh  = 140;  // Higher is lamp stays off (Also a buffer)
-const unsigned int solarLow   = 90;   // Below is lamp on + timer start
+const unsigned int solarHigh  = 75;   // Higher is lamp stays off (Also a buffer)
+const unsigned int solarLow   = 70;   // Below is lamp on + timer start
 int solarCnt          = 1;
 int solarTmp          = 0;
 
@@ -117,7 +126,7 @@ long interval = 1;     // Turn off lamp/rgb at X hour (Default at 01:00)
 const unsigned int fanPin  = 5;   // Pin
 int fanSpeed = 0;
 int lastfanSpeed = 0;
-int fanOff = tempMin ; // Turn off fan below X degrees
+int fanOff = tempMin ;            // Turn off fan below X degrees
 
 // ############################################################################
 // # Init timer library
@@ -130,21 +139,27 @@ char str[16] = "...";
 // ############################################################################
 // # Setup
 void setup() {
+  printlogHeader();
   Serial.println("Start up");
   // Start Serial
-  Serial.begin(115200);
+  Serial.begin(9600);
 
-  // if (! rtc.begin()) {
-  //   Serial.println("ERROR: Couldn't find RTC");
-  // }
-  // if (! rtc.isrunning()) {
-  //   Serial.println("RTC is NOT running!");
-  // following line sets the RTC to the date & time this sketch was compiled
-  rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-  // This line sets the RTC with an explicit date & time, for example to set
-  // January 21, 2014 at 3am you would call:
-  // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
-  //  }
+  if (!driver.init())
+    Serial.println("ERROR: 433Mhz receiver not found");
+
+  if (! rtc.begin()) {
+    printlogHeader();
+    Serial.println("ERROR: Couldn't find RTC");
+  }
+  if (! rtc.isrunning()) {
+    printlogHeader();
+    Serial.println("RTC is NOT running!");
+    // following line sets the RTC to the date & time this sketch was compiled
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    // This line sets the RTC with an explicit date & time, for example to set
+    // January 21, 2014 at 3am you would call:
+    // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
+  }
   // Play startup tones
   tone(SPEAKER, NOTE_C6, 150);
   delay(200);
@@ -155,7 +170,6 @@ void setup() {
   noTone(SPEAKER);
 
   // Set pin mode
-  pinMode(13, OUTPUT);
   pinMode(RED_PIN, OUTPUT);
   pinMode(GREEN_PIN, OUTPUT);
   pinMode(BLUE_PIN, OUTPUT);
@@ -166,8 +180,8 @@ void setup() {
   pinMode(fanPin, OUTPUT);
   pinMode(buttonPin, INPUT);
 
+
   // Set pin defaults
-  digitalWrite(13, LOW);      // Internal led off
   digitalWrite(RLA, HIGH);    // Relay off
   digitalWrite(RLB, HIGH);    // Relay off  -- High - RED LED // Low - GREEN LED
   digitalWrite(RLC, HIGH);    // Relay off
@@ -175,6 +189,7 @@ void setup() {
   analogWrite(fanPin, 0);     // FAN off
 
   // Relay test
+  printlogHeader();
   Serial.println("Relay Test");
   delay(300);
   digitalWrite(RLA, LOW);
@@ -196,6 +211,7 @@ void setup() {
   delay(300);
   //
   digitalWrite(RLD, LOW); // Power the FAN by setting Relay D
+  printlogHeader();
   Serial.println("Fan Test");
 
   for ( int f = 0; f <= 255; f++) {
@@ -212,7 +228,7 @@ void setup() {
   digitalWrite(RLD, HIGH); // Power the FAN by setting Relay D
 
   analogWrite(fanPin, 0);     // FAN off
-
+  printlogHeader();
   Serial.println("RGB Test");
   digitalWrite(RLC, LOW); // Power on
   setColourRgb(0, 0, 0);      // Turn off RGB OFF
@@ -235,10 +251,10 @@ void setup() {
 
   //Timers
   int buttonEvent = t.every(25, checkButton, (void*)2);
-  int timerEvent  = t.every(10000, checkTimer, (void*)2);
+  int timerEvent  = t.every(13550, checkTimer, (void*)2);
   int solarEvent  = t.every(3000, checkSolar, (void*)2);
   int rgbEvent    = t.every(2850, checkRGB, (void*)2);
-  int lampEvent   = t.every(2000, checkLamp, (void*)2);
+  int lampEvent   = t.every(10000, checkLamp, (void*)2);
   int tempEvent   = t.every(4750, checkTemp, (void*)2);
 
   // Remove flickering by using highest PWM frequency (PIN usage is important!)
@@ -257,7 +273,7 @@ void setup() {
   tone(SPEAKER, NOTE_A6, 50);
   delay(55);
   tone(SPEAKER, NOTE_A7, 50);
-
+  printlogHeader();
   Serial.println("################### Started ####################");
 
 }
@@ -282,6 +298,23 @@ void loop() {
   // Update timers
   t.update();
 
+  //
+  uint8_t buf[RH_ASK_MAX_MESSAGE_LEN];
+  uint8_t buflen = sizeof(buf);
+
+  if (driver.recv(buf, &buflen)) // Non-blocking
+  {
+    int xi;
+
+    printlogHeader();
+    Serial.print(" # RX: ");
+    for (xi = 0; xi < buflen; xi++)
+    {
+      Serial.write(buf[xi]);
+    }
+    Serial.println();
+  }
+
 }
 
 void checkTemp(void* context)
@@ -301,6 +334,7 @@ void checkTemp(void* context)
   if (fanSpeed > 255)
     fanSpeed = 255;
 
+  printlogHeader();
   Serial.print(" | Temperature: ");
   Serial.print(temperatureInCelsius, 4);
   Serial.println(" Celsius");
@@ -314,7 +348,7 @@ void checkTemp(void* context)
   if ((temperatureInCelsius >= tempMin) && (temperatureInCelsius <= tempMax)) {
     digitalWrite(RLD, LOW);         // Power the FAN by setting Relay D
     analogWrite(fanPin, fanSpeed);  // Set FAN Speed
-   
+    printlogHeader();
     Serial.print(F(" | FAN Speed: "));
     Serial.print(fanSpeedP);
     Serial.println(F("%"));
@@ -325,6 +359,7 @@ void checkTemp(void* context)
   if ( temperatureInCelsius > tempMax ) {
     analogWrite(fanPin, 255); // Set FAN at max Speed
     digitalWrite(RLD, LOW);
+    printlogHeader();
     Serial.print(F(" | FAN: Speed (max reached): "));
     Serial.println(fanSpeed);
   }
@@ -343,28 +378,16 @@ void checkLamp(void* context)
   if (Automatic) {
     // Led red/green state
     digitalWrite(RLB, !lampState); // Note the ! to invert it.
+ //   delay(60);
     // Turn on/off lamp on relay A
     // This relay activates another relay (24volt rail) that switches a 240volt lamp.
     digitalWrite(RLA, !lampState); // Note the ! to invert it.
+ //   delay(60);
     // RGB Power
     digitalWrite(RLC, !lampState); // Note the ! to invert it.
-    // internal led state
-    digitalWrite(13, lampState);
+ //   delay(60);
   }
 
-  // test RTC
-
-  //if (! rtc.begin()) {
-  // No RTC found, exit
-  //return;
-  //  }
-  DateTime now = rtc.now();
-  Serial.print(now.hour(), DEC);
-  Serial.print(':');
-  Serial.print(now.minute(), DEC);
-  Serial.print(':');
-  Serial.print(now.second(), DEC);
-  Serial.println();
 }
 
 void checkRGB(void* context)
@@ -388,25 +411,19 @@ void checkRGB(void* context)
 void checkSolar(void* context)
 {
 
+
+
   if (!Automatic) {
     return;
   }
-
-  int reading = analogRead(solarPin);
-  float voltage = reading * 5.0;
-  voltage /= 1024.0;
-
-  // print out the voltage
-  Serial.print(F(" | Solar: "));
-  Serial.print(voltage);
-  Serial.println(F(" Volt"));
-
+  printlogHeader();
   Serial.print(F(" | Solar: value: "));
   Serial.println(solarValue);
 
   if (  solarValue < solarLow ) {
-    if (!solarState) {
+    if (solarState) {
       if (!lampState) {
+        printlogHeader();
         Serial.println(F(" | Solar -> LAMP ON "));
         tone(SPEAKER, NOTE_D7, 150);
         lampState = HIGH;
@@ -415,8 +432,9 @@ void checkSolar(void* context)
   }
 
   if (  solarValue > solarHigh ) { // high value (light outside)
-    solarState = LOW ;
+    solarState = 1; // Reset solar after the night
     if (lampState) {
+      printlogHeader();
       Serial.println(F(" | Solar -> LAMP OFF "));
       lampState = LOW;
       tone(SPEAKER, NOTE_D5, 150);
@@ -435,17 +453,20 @@ void checkTimer(void* context)
   int uur = now.hour();
 
   if (uur >= interval && uur <= 6 && Automatic) {
-
+    printlogHeader();
     Serial.println(F(" | Time to turn the lamp off | "));
 
     if (lampState) {
+      printlogHeader();
       Serial.println(F(" | Timer -> LAMP OFF "));
       lampState = LOW;
-      solarState = HIGH;
+      solarState = 0;
       tone(SPEAKER, NOTE_G6, 50);
       delay(55);
       tone(SPEAKER, NOTE_G7, 50);
     }
+  } else {
+    solarState = 1; // reset solar
   }
 }
 
@@ -457,23 +478,25 @@ void checkButton(void* context)
   }
 
   if (buttonState != lastButtonState) {
-
+    printlogHeader();
     Serial.print(F(" | Buttonstate: "));
     Serial.println(buttonState);
 
     if (  solarValue > solarHigh ) {
       tone(SPEAKER, NOTE_C3, 150);
       // Don't allow to turn on light by button while it is light outside
+      printlogHeader();
       Serial.println(F(" | Button is ignored by Solar state "));
       return;
     }
 
     if (buttonState) {
       if (lampState) {
+        printlogHeader();
         Serial.println(F(" | Button -> LAMP OFF "));
         lampState = LOW;
-        solarState = HIGH;
       } else {
+        printlogHeader();
         Serial.println(F(" | Button -> LAMP ON "));
         lampState = HIGH;
       }
@@ -487,7 +510,7 @@ void setColourRgb(unsigned int red, unsigned int green, unsigned int blue) {
   analogWrite(RED_PIN, red);
   analogWrite(GREEN_PIN, green);
   analogWrite(BLUE_PIN, blue);
-
+  printlogHeader();
   Serial.print(F(" | RGB change colors r,g,b: "));
   Serial.print(red);
   Serial.print(F(","));
@@ -536,6 +559,7 @@ void receiveData(int byteCount) {
 
   while (Wire.available()) {
     DataIn = Wire.read();
+    printlogHeader();
     Serial.print(" # Data RX: ");
     Serial.println(DataIn);
 
@@ -548,11 +572,13 @@ void receiveData(int byteCount) {
         Automatic = 0;
         state = 1;
         DataOut = 100;
+        printlogHeader();
         Serial.println(" * Auto mode: OFF");
       } else {
         Automatic = 1;
         state = 0;
         DataOut = 101;
+        printlogHeader();
         Serial.println(" * Auto mode: ON");
       }
     }
@@ -580,6 +606,7 @@ void receiveData(int byteCount) {
       blueLevel = map(blueLevel, -1000, 1000, 0, RGB_BRIGHTNESS);
       setColourRgb(redLevel, greenLevel, blueLevel);
 
+      printlogHeader();
       Serial.print(F(" | RGB (Manual) change colors r,g,b: "));
       Serial.print(redLevel);
       Serial.print(F(","));
@@ -590,11 +617,10 @@ void receiveData(int byteCount) {
       Serial.println(blueLevel);
 
     }
-    
+
     // # 5 -- All Off
     if (DataIn == 5 && !Automatic) {
       DataOut = 1;
-      digitalWrite(13, LOW);      // Internal led off
       digitalWrite(RLA, HIGH);    // Relay off
       digitalWrite(RLB, HIGH);    // Relay off  -- High - RED LED // Low - GREEN LED
       digitalWrite(RLC, HIGH);    // Relay off
@@ -602,16 +628,17 @@ void receiveData(int byteCount) {
       analogWrite(fanPin, 0);     // FAN off
       setColourRgb(0, 0, 0);
     }
-    // # 255 -- 
+    // # 255 --
     if (DataIn == 255) {
-    DataOut = 1;
-    }    
+      DataOut = 1;
+    }
   }
 }
 
 // I2C callback for sending data
 void sendData() {
   Wire.write(DataOut);
+  printlogHeader();
   Serial.print(" # Data TX: ");
   Serial.println(DataOut);
   DataOut = 0; // reset
@@ -680,4 +707,23 @@ char* dec2strf(float floatNumber, uint8_t dp)
   return str;
 }
 
+// add leading zero to single digit
+void print2digits(int xnumber) {
+  if (xnumber >= 0 && xnumber < 10) {
+    Serial.write('0');
+  }
+  Serial.print(xnumber);
+}
+
+
+// Log header (time)
+void printlogHeader() {
+  DateTime now = rtc.now();
+  print2digits(now.hour());
+  Serial.print(':');
+  print2digits(now.minute());
+  Serial.print(':');
+  print2digits(now.second());
+  Serial.print(" ");
+}
 // #### END ####
