@@ -2,16 +2,23 @@
 #include <Ethernet.h>
 #include <MySQL_Connection.h> //  https://github.com/copterino/MySQL_Connector_Arduino
 #include <MySQL_Cursor.h>
-#include <Timer.h>
+#include <Timer.h>            // Timer library - https://github.com/JChristensen/Timer
 #include <SevenSegmentTM1637.h>
 // ---------------------------------------------------------------------
 //
 // Sketch may not exceed lower then 825 bytes for local variables, else Arduino uno v3 resets in error
+//  * Below is version 2 (version 3 not used)
 // Current: Sketch - 28590 bytes used
 // Global variables - 1217 bytes used
 // Local variables - 831 bytes free (6 bytes remaining before it crashes!)
 //
 // Ethernet shield
+//
+// Version 4, removed solar. I am moved to a new house, solar will be done by 433Hmz link with 
+// - another arduino setup.
+// Current: Sketch - 27266 bytes used
+// Global variables - 1145 bytes used
+// Local variables - 903 bytes free
 //
 // Define space for dec2strf function
 char str[16] = "...";
@@ -34,8 +41,8 @@ IPAddress subnet(255, 255, 255, 0);
 
 // MySQL Section
 IPAddress server_addr(192, 168, 0, 91); // IP of the MySQL *server* here
-const char user[] = "user";            // mysql user
-const char password[] = "pass";           // mysql password
+const char user[] = "USER";            // mysql user
+const char password[] = "PASS";           // mysql password
 EthernetClient client;
 MySQL_Connection conn((Client *)&client);
 
@@ -43,22 +50,17 @@ const unsigned int ROOD = 5;        // red led
 const unsigned int GEEL = 6;        // yellow led
 const unsigned int GROEN = 7;       // green led
 
-const unsigned int ld1 = A3;       // led
+//const unsigned int ld1 = A3;       // led
 const unsigned int ld2 = A4;       // led
 const unsigned int ld3 = A5;       // led
 
 const unsigned long PERIOD1 = 500;  // half second blink for heartbeat led
-const unsigned int solarPin = A0;   // solar at analog pin A0
 
 String celsius;                     // variable for temperature as string
 String disptemp;                    // variable for temperature as integer for display
-int solarValue;                     // variable for reading A0
-String solarLevel;                  // variable for solar in procent
 int num_fails;                      // variable for number of failure attempts
 #define MAX_FAILED_CONNECTS 5       // maximum number of failed connects to MySQL
 int wissel = true;                  // change display check
-int solarCnt          = 1;          // for a stable solar reading
-int solarTmp          = 0;          // for a stable solar reading
 
 // ----------------------------------------------------------------------
 
@@ -77,11 +79,11 @@ void setup() {
   pinMode(GROEN, OUTPUT);
 
 
-  pinMode(ld1, OUTPUT);
+//  pinMode(ld1, OUTPUT);
   pinMode(ld2, OUTPUT);
   pinMode(ld3, OUTPUT);
 
-  digitalWrite(ld1, HIGH);
+//  digitalWrite(ld1, HIGH);
   digitalWrite(ld2, HIGH);
   digitalWrite(ld3, HIGH);
 
@@ -109,8 +111,7 @@ void setup() {
   int updateEthernetEvent = t.every(30000, updateEthernet, (void*)2); // update ethernet stuff
   int writeMySQLEvent = t.every(60000, writeMySQL, (void*)2);         // write data to mysql
   int readSensorEvent = t.every(2500, readSensor, (void*)2);          // read temperature
-  int solarEvent = t.every(3500, readSolar, (void*)2);                // read solar
-  int writeDispEvent = t.every(6000, writeDisp, (void*)2);            // write temperature and solar to TM1637 display
+  int writeDispEvent = t.every(6000, writeDisp, (void*)2);            // write temperature to TM1637 display
 
   digitalWrite(ROOD, LOW);
 
@@ -123,17 +124,6 @@ void setup() {
 
 void loop() {
   t.update();
-  int solar = analogRead(solarPin);
- // Make solar value more stable
- // Makes also a better graphics picture smoother
-  if (solarCnt == 30) {
-    solarValue = solarTmp / 30;
-    solarTmp = 0;
-    solarCnt = 1;
-  } else {
-    solarTmp = solarTmp + solar;
-    solarCnt++;
-  }
 }
 
 void updateEthernet(void* context)
@@ -266,32 +256,11 @@ void writeDisp(void* context)
 {
   t.oscillate(ld2, 50, LOW, 1);
   display.clear();
-  display.setColonOn(0);
-
-  if (wissel) {
-
-    Serial.println(F("INFO: Update display C"));
-    display.setColonOn(1);
-    byte rawData = B01100011;
-    display.print(disptemp);
-    display.printRaw(rawData, 3);
-    wissel = false;
-
-  } else {
-
-    Serial.println(F("INFO: Update display P"));
-    int digitoneS = map(solarValue, 0, 672, 0, 100) / 10;
-    int digittwoS = map(solarValue, 0, 672, 0, 100) % 10;
-    int8_t datadisplay[] = {0x0, 0x0, 0x0, 0x0};
-    datadisplay[0] = display.encode(digitoneS);
-    datadisplay[1] = display.encode(digittwoS);
-    datadisplay[3] = display.encode('P'); // P
-
-    display.printRaw(datadisplay);
-    wissel = true;
-
-  }
-
+  Serial.println(F("INFO: Update display C"));
+  display.setColonOn(1);
+  byte rawData = B01100011;
+  display.print(disptemp);
+  display.printRaw(rawData, 3);
 }
 
 
@@ -301,10 +270,6 @@ void writeMySQL(void* context)
 
   Serial.print(F("# Temp     : "));
   Serial.println(celsius);
-  Serial.print(F("# Solar    : "));
-  Serial.println(solarValue);
-  Serial.print(F("# Opbrengst: "));
-  Serial.println(solarLevel);
 
   String SQL;
   int tmp_str_len;
@@ -319,11 +284,11 @@ void writeMySQL(void* context)
     SQL.toCharArray(mquery, tmp_str_len);
     cur_mem->execute(mquery);
 
-    SQL = "INSERT INTO temperatuur.solar (value, date) VALUES('" +  solarLevel + "', UNIX_TIMESTAMP(now())) ";
-    tmp_str_len = SQL.length() + 1;
-    char mmquery[tmp_str_len];
-    SQL.toCharArray(mmquery, tmp_str_len);
-    cur_mem->execute(mmquery);
+//    SQL = "INSERT INTO temperatuur.solar (value, date) VALUES('" +  solarLevel + "', UNIX_TIMESTAMP(now())) ";
+//    tmp_str_len = SQL.length() + 1;
+//    char mmquery[tmp_str_len];
+//    SQL.toCharArray(mmquery, tmp_str_len);
+//    cur_mem->execute(mmquery);
 
     delete cur_mem;
 
@@ -345,18 +310,6 @@ void writeMySQL(void* context)
   t.oscillate(ROOD, 75, LOW, 3);
 }
 
-void readSolar(void* context)
-{
-  t.oscillate(ld1, 50, LOW, 1);
-  Serial.print(F("INFO: Read Solar - "));
-
-  solarLevel = map(solarValue, 0, 672, 0, 100);
-  
-  Serial.print(solarLevel);
-  Serial.print(F(" P - "));
-  Serial.println(solarValue);
-}
-
 void soft_reset() {
   Serial.println("");
   Serial.println(F("INFO: RESET!"));
@@ -367,7 +320,7 @@ void soft_reset() {
 
 void teller() {
   display.clear();
-  for ( int c = 20; c >= 0; c--) {
+  for ( int c = 20; c >= 1; c--) {
     display.print(c);
     delay(1000);
     display.clear();
